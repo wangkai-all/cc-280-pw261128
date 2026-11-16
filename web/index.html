@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>类型推断与入仓工作台</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◳</span>
+    <div>
+      <h1>类型推断与入仓工作台</h1>
+      <p class="subtitle">可解释的类型承诺 · 不静默截断 · 不全量转文本的假兼容</p>
+    </div>
+  </div>
+  <div class="ds-picker">
+    <label>数据集</label>
+    <select id="dsSelect"></select>
+    <button id="btnNewDs" class="btn small">新建</button>
+    <button id="btnRefresh" class="btn small ghost">刷新</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="import" class="tab active">① 导入与原始保留</button>
+  <button data-tab="infer" class="tab">② 类型推断</button>
+  <button data-tab="disposition" class="tab">③ 处置选择</button>
+  <button data-tab="preview" class="tab">④ 逐行转换</button>
+  <button data-tab="publish" class="tab">⑤ 发布与并发</button>
+  <button data-tab="query" class="tab">⑥ 查询与对比</button>
+  <button data-tab="audit" class="tab">⑦ 审计与隔离</button>
+</nav>
+
+<main>
+  <!-- ① 导入 -->
+  <section class="panel active" id="panel-import">
+    <div class="grid-2">
+      <div class="card">
+        <h2>导入原始 JSON / JSONL</h2>
+        <p class="hint">支持 JSON 数组或逐行 JSONL；坏行会逐行报错而不是炸掉整份导入。原始文本永久保留，转换永不覆盖原文。</p>
+        <div class="row">
+          <input id="srcName" placeholder="来源名称（可选）" class="input">
+          <button id="btnLoadSample" class="btn">载入合成主数据集</button>
+          <button id="btnLoadLate" class="btn ghost">载入延迟类型流</button>
+          <button id="btnLoadBad" class="btn ghost warn">载入反例文件</button>
+        </div>
+        <textarea id="importText" class="code-input" spellcheck="false"
+          placeholder='粘贴 JSON 数组 [{"a":1}] 或 JSONL，每行一个对象'></textarea>
+        <div class="row end">
+          <button id="btnImport" class="btn primary">导入并保留原文</button>
+        </div>
+        <div id="importResult" class="result-box"></div>
+      </div>
+      <div class="card">
+        <h2>已保留的原始批次与记录</h2>
+        <div id="batchList" class="meta-list"></div>
+        <div class="table-wrap">
+          <table id="rawTable" class="data-table">
+            <thead><tr><th>#</th><th>row_id</th><th>原始 JSON</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② 推断 -->
+  <section class="panel" id="panel-infer">
+    <div class="card">
+      <h2>流式类型推断</h2>
+      <p class="hint">逐行累加，每个出现过的类型都被计数。持续接入时从上次快照合并而非从零开始。可注入故障验证检查点恢复。</p>
+      <div class="row">
+        <button id="btnInfer" class="btn primary">执行全量推断</button>
+        <button id="btnInferFail" class="btn ghost warn">故障注入（10 行后中断）</button>
+        <button id="btnInferResume" class="btn ghost">按检查点恢复重跑</button>
+        <span id="inferMeta" class="inline-meta"></span>
+      </div>
+      <div id="inferSummary" class="result-box"></div>
+      <div class="table-wrap">
+        <table id="inferTable" class="data-table wide">
+          <thead><tr>
+            <th>字段路径</th><th>承诺类型</th><th>观察到的类型计数</th>
+            <th>缺失</th><th>NUMSTR 形态</th><th>样本</th><th>建议</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ 处置 -->
+  <section class="panel" id="panel-disposition">
+    <div class="card">
+      <h2>为每个冲突字段选择处置策略</h2>
+      <div class="legend">
+        <span class="chip reject">REJECT 严格拒收：不满足承诺的行进隔离区，主表强类型可优化</span>
+        <span class="chip union">UNION 保留联合：变体原值 + 判别子入仓，零损失但聚合需分流</span>
+        <span class="chip shadow">SHADOW 影子新列：主列维持强类型，异类原值进影子列</span>
+      </div>
+      <div class="row">
+        <button id="btnDraft" class="btn primary">按最新推断生成草稿</button>
+        <span id="draftMeta" class="inline-meta"></span>
+      </div>
+      <div id="draftBox" class="table-wrap"></div>
+      <div class="row end">
+        <button id="btnSaveDraft" class="btn">保存草稿（带守卫 CAS）</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ 逐行转换 -->
+  <section class="panel" id="panel-preview">
+    <div class="card">
+      <h2>逐行转换预览（预览即实际入仓逻辑）</h2>
+      <div class="row">
+        <label>草稿/版本</label>
+        <select id="previewVersion" class="input"></select>
+        <label>原始行号</label>
+        <input id="previewRow" type="number" min="0" value="0" class="input small-input">
+        <button id="btnPreviewRow" class="btn">预览该行</button>
+      </div>
+      <textarea id="previewCustom" class="code-input" spellcheck="false"
+        placeholder="或粘贴一条自定义 JSON 记录测试边界（如延迟出现的新类型）"></textarea>
+      <div class="row end"><button id="btnPreviewCustom" class="btn primary">预览自定义记录</button></div>
+      <div id="previewResult" class="result-box"></div>
+    </div>
+  </section>
+
+  <!-- ⑤ 发布 -->
+  <section class="panel" id="panel-publish">
+    <div class="grid-2">
+      <div class="card">
+        <h2>结构确认与入仓发布</h2>
+        <p class="hint">确认后版本 append-only：已确认结构没有任何修改入口。入仓按行检查点推进，隔离行永不自动发布。</p>
+        <div class="row">
+          <button id="btnConfirm" class="btn primary">确认草稿结构</button>
+          <button id="btnIngest" class="btn">入仓（已确认版本）</button>
+          <button id="btnIngestFail" class="btn ghost warn">入仓故障注入</button>
+        </div>
+        <div id="publishResult" class="result-box"></div>
+        <h3>版本时间线</h3>
+        <div id="versionTimeline" class="timeline"></div>
+      </div>
+      <div class="card">
+        <h2>并发场景演示</h2>
+        <p class="hint">推断、持续接入、结构确认并发时，旧推断任务不能回退已确认结构；过期守卫写入返回 409。</p>
+        <div class="row wrap">
+          <button id="btnRaceDemo" class="btn warn">模拟旧任务抢写草稿（守卫冲突）</button>
+        </div>
+        <div id="raceResult" class="result-box"></div>
+        <h3>任务状态</h3>
+        <div id="jobList" class="meta-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑥ 查询对比 -->
+  <section class="panel" id="panel-query">
+    <div class="grid-2">
+      <div class="card">
+        <h2>已发布数据查询</h2>
+        <div class="row wrap">
+          <label>版本</label><select id="queryVersion" class="input"></select>
+          <label>路径</label><select id="queryPath" class="input"></select>
+          <label>操作</label>
+          <select id="queryOp" class="input">
+            <option value="scan">scan 全量</option>
+            <option value="eq">eq 等于</option>
+            <option value="gt">gt 大于</option>
+            <option value="lt">lt 小于</option>
+            <option value="avg">avg 均值</option>
+            <option value="count">count 计数</option>
+            <option value="min">min 最小</option>
+            <option value="max">max 最大</option>
+          </select>
+          <input id="queryValue" class="input small-input" placeholder="比较值">
+          <button id="btnQuery" class="btn primary">查询</button>
+        </div>
+        <div id="queryResult" class="result-box"></div>
+      </div>
+      <div class="card">
+        <h2>三策略取舍对比：查询能力 × 信息保真</h2>
+        <div class="row">
+          <label>字段路径</label><select id="comparePath" class="input"></select>
+          <button id="btnCompare" class="btn">生成对比</button>
+        </div>
+        <div id="compareResult" class="result-box"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑦ 审计 -->
+  <section class="panel" id="panel-audit">
+    <div class="grid-2">
+      <div class="card">
+        <h2>隔离区（严格分账，published 恒为 0）</h2>
+        <div id="quarantineBox" class="table-wrap"></div>
+      </div>
+      <div class="card">
+        <h2>审计日志</h2>
+        <div id="auditBox" class="meta-list tall"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
